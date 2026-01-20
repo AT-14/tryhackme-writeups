@@ -1,0 +1,302 @@
+# TryHackMe — Carnage
+
+**Category:** Blue Team / SOC   
+**Difficulty:** Medium     
+
+---
+
+## 🎯 Objective
+Apply SOC-style analysis to a malicious packet capture, identify initial infection, follow-on activity, C2 infrastructure, and post-infection traffic using **Wireshark** and external intelligence (VirusTotal).
+
+---
+
+## 🧠 Key Concepts
+- Malicious document delivery and execution (malspam)
+- HTTP-based payload delivery & web server fingerprinting
+- Cobalt Strike C2 traffic identification
+- SSL/TLS certificate analysis
+- Post-infection beaconing and data exfil patterns
+- SMTP traffic review for malspam
+
+---
+
+## 🔍 Investigation Workflow
+
+### 1️⃣ Data & Initial Context
+
+**Scenario Summary**
+
+Eric Fischer (Purchasing Dept, Bartell Ltd) received a malicious Word document via email. After enabling macros (“Enable Content”), the SOC received alerts about suspicious outbound connections from his workstation. A **PCAP** from the network sensor was provided for analysis.
+
+**What was provided**
+- A single **PCAP** file containing:
+  - HTTP(S) traffic
+  - Download of a malicious ZIP
+  - Cobalt Strike C2 communications
+  - DNS queries
+  - SMTP traffic (malspam)
+
+**Why this matters in a SOC**
+This is a classic **initial access → payload delivery → C2** chain. Being able to reconstruct this from packets is exactly what tier-1/tier-2 analysts do during investigations.
+
+---
+
+### 2️⃣ Analysis Process
+
+## Question 1 — First Malicious HTTP Connection
+
+**Question:**  
+What was the date and time for the first HTTP connection to the malicious IP?
+
+(answer format: yyyy-mm-dd hh:mm:ss)
+
+**Answer: 2021-09-24 16:44:38**  
+The traffic was filtered using `http` to display only HTTP packets.  
+The **first HTTP packet** observed was identified as the initial malicious connection.  
+The timestamp should be displayed in **UTC format** (`yyyy-mm-dd hh:mm:ss`).
+
+---
+
+## Question 2 — Downloaded ZIP File Name
+
+**Question:**  
+What is the name of the zip file that was downloaded?
+
+**Answer: documents.zip**  
+The ZIP file name was identified in the **same HTTP packet** used in Question 1.  
+The file name was visible directly in the HTTP request.
+
+---
+
+## Question 3 — Domain Hosting the Malicious ZIP
+
+**Question:**  
+What was the domain hosting the malicious zip file?
+
+**Answer: attirenepal.com**  
+The destination IP address hosting the ZIP file was identified from the same HTTP Packet used in Question 1.  
+Using **Statistics → Resolved Addresses**, the IP address was searched to determine the associated **Domain Name**.
+
+---
+
+## Question 4 — File Inside the ZIP Archive
+
+**Question:**  
+Without downloading the file, what is the name of the file inside the zip file?
+
+**Answer: chart-1530076591.xls**  
+After following the HTTP stream of the ZIP File download, the contents of the fie were visible in the Response.  
+The **file name inside the ZIP** can be seen at the beginning of the `.zip` data.
+
+---
+
+## Question 5 — Webserver Name
+
+**Question:**  
+What is the name of the webserver of the malicious IP from which the zip file was downloaded?
+
+**Answer: LiteSpeed**  
+The webserver name was identified by inspecting the **`Server` header** in the HTTP response within the same HTTP stream used for the ZIP file download.
+
+---
+
+## Question 6 — Webserver Version
+
+**Question:**  
+What is the version of the webserver from the previous question?
+
+**Answer: PHP/7.2.34**  
+The webserver version was identified by examining the **`X-Powered-By` header** in the same HTTP response.
+
+---
+
+## Question 7 — Malicious Download Domains
+
+**Question:**  
+Malicious files were downloaded to the victim host from multiple domains. What were the three domains involved with this activity?
+
+**Answer: finejewels.com.au, thietbiagt.com, new.americold.com**  
+HTTPS traffic was filtered within the time window specified in the challenge hint using the filter:
+  `tls && frame.time >= "2021-09-24 16:45:11" && frame.time <= "2021-09-24 16:45:30"`
+
+Within this timeframe, multiple TLS connections involving the victim host were observed.  
+Only connections that **completed the TLS handshake and exchanged application data** were considered valid.
+
+Three destination IP addresses met these criteria:
+- `148.72.192.206`
+- `210.245.90.247`
+- `148.72.53.144`
+
+Using **Statistics → Resolved Addresses**, these IP addresses were resolved to the following domains:
+- `finejewels.com.au`
+- `thietbiagt.com`
+- `new.americold.com`
+
+---
+
+## Question 8 — Certificate Authority
+
+**Question:**  
+Which certificate authority issued the SSL certificate to the first domain from the previous question?
+
+**Answer: GoDaddy**  
+The TLS handshake associated with the first malicious domain, **`finejewels.com.au`**, was inspected.  
+By examining the **Transport Layer Security Section** in the server certificate packet, the **issuer** was identified as **GoDaddy**.
+
+---
+
+## Question 9 — Cobalt Strike C2 Server IP Addresses
+
+**Question:**  
+What are the two IP addresses of the Cobalt Strike servers?
+
+**Answer: 185.106.96.158, 185.125.204.174**  
+Cobalt Strike Servers are used as C2 servers and mostly runs on ports 80 , 8080 and 443. I filtered the traffic to be on port 80 8080 and 443 using the filter: 
+  `tcp.port in {80 8080 443}`
+
+Then going to **Statistics → Conversations → TCP**, and sorting the **number of packets exchanged** in descending order.  
+This approach highlights long-lived or high-volume connections, which are characteristic of C2 communication.
+
+The IP addresses associated with the most suspicious traffic were then searched on **VirusTotal**.  
+By reviewing the **Community** tab, two IP addresses were confirmed to be identified as **Cobalt Strike C2 servers**.
+
+---
+
+## Question 10 — Host Header of the First Cobalt Strike Server
+
+**Question:**  
+What is the Host header for the first Cobalt Strike IP address from the previous question?
+
+**Answer: ocsp.verisign.com**  
+HTTP traffic involving the first Cobalt Strike IP address was isolated using the filter:
+  `http && ip.addr == 185.106.96.158`
+By following the relevant **HTTP stream**, the **Host header** was extracted directly from the HTTP request.
+
+---
+
+## Question 11 — Domain Name of the First Cobalt Strike Server
+
+**Question:**  
+What is the domain name for the first IP address of the Cobalt Strike server?
+
+**Answer: survmeter.live**  
+The IP address was searched on **VirusTotal**, and the domain name was confirmed using the **Community** tab.  
+Another approach, Searching the IP in **Statistics → Resolved Addresses**.
+
+---
+
+## Question 12 — Domain Name of the Second Cobalt Strike Server
+
+**Question:**  
+What is the domain name of the second Cobalt Strike server IP?
+
+**Answer: securitybusinpuff.com**  
+Same procedure as the previous question.
+
+---
+
+## Question 13 — Post-Infection Traffic Domain
+
+**Question:**  
+What is the domain name of the post-infection traffic?
+
+**Answer: maldivehost.net**  
+HTTP traffic was filtered to show only POST requests using:
+  `http.request.method == "POST"`
+
+Most of the traffic is between the victim and the malicious domain. The Domain Name is found by searching the malicious IP using **Statistics → Resolved Addresses**
+
+---
+
+## Question 14 — First Eleven Characters Sent to the Malicious Domain
+
+**Question:**  
+What are the first eleven characters that the victim host sends out to the malicious domain involved in the post-infection traffic?
+
+**Answer: zLIisQRWZI9**  
+Using the same POST request identified for the post-infection traffic, the related **HTTP stream** was followed.  
+In the **HTTP Request Line**, the **first eleven characters** of the request were read directly and recorded as the answer.
+
+---
+
+## Question 15 — Length of the First Packet Sent to the C2 Server
+
+**Question:**  
+What was the length for the first packet sent out to the C2 server?
+
+**Answer: 281**  
+The packets identified in the previous question was inspected.  
+By examining the **Frame** section, the **packet length in bytes** was observed and recorded.
+
+---
+
+## Question 16 — Server Header of the Post-Infection Domain
+
+**Question:**  
+What was the Server header for the malicious domain from the previous question?
+
+**Answer: Apache/2.4.49 (cPanel) OpenSSL/1.1.1l mod_bwlimited/1.4**  
+The relevant **HTTP stream** was followed, and the **`Server` header** was extracted from the HTTP response.
+
+---
+
+## Question 17 — DNS Query Timestamp for IP Check API
+
+**Question:**  
+The malware used an API to check for the IP address of the victim’s machine. What was the date and time when the DNS query for the IP check domain occurred? (answer format: yyyy-mm-dd hh:mm:ss UTC)
+
+**Answer: 2021-09-24 17:00:04**  
+DNS traffic was filtered to identify API-related queries using:
+ `dns && dns.qry.name contains "api" 
+
+From the filtered results, two APIs appeared. Searching them on Google, the DNS query corresponding to **`api.ipify.org`** was identified as the one used for IP lookup, and the **timestamp** of the first packet was recorded in **UTC format**.
+
+---
+
+## Question 18 — IP Check API Domain
+
+**Question:**  
+What was the domain in the DNS query from the previous question?
+
+**Answer: api.ipify.org**  
+Answered in the previous question.
+
+---
+
+## Question 19 — First MAIL FROM Address
+
+**Question:**  
+What was the first MAIL FROM address observed in the traffic?
+
+**Answer: farshin@mailfa.com**  
+SMTP traffic was filtered using the `smtp` display filter.  
+The first **MAIL FROM** command was identified from the **Info** column or by following the **TCP stream**, and the sender address was recorded.
+
+---
+
+## Question 20 — SMTP Packet Count
+
+**Question:**  
+How many packets were observed for the SMTP traffic?
+
+**Answer: 1439**  
+SMTP traffic was filtered using the `smtp` display filter.  
+The **total number of packets** was obtained directly from the **Wireshark status bar** and recorded.
+
+---
+
+## 🛠️ Tools Used
+- Wireshark
+
+---
+
+## 📌 Lessons Learned
+- Practiced reconstructing an infection timeline using PCAP analysis.
+- Became more efficient using Wireshark filters, streams, and statistics.
+
+---
+
+## 🧠 SOC Perspective
+- **Detection:** Repeated POST requests and long-lived TLS sessions can indicate C2 activity.
+- **Alerting:** Repeated outbound connections to uncommon external domains can be used as reliable alert indicators.
+- **Investigation:** Enriching traffic with threat intelligence improves confidence and accuracy.
